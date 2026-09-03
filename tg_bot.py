@@ -85,7 +85,12 @@ class TelegramBridge:
                 if member.status in ("administrator", "creator"):
                     logger.info(f"✅ Бот подтверждён как администратор группы обсуждений ({self.discussion_id})")
                 elif member.status == "member":
-                    logger.warning(f"⚠️ Бот является обычным участником в группе {self.discussion_id}. Рекомендуется дать права администратора.")
+                    logger.warning(
+                        f"⚠️ ВНИМАНИЕ: Бот является обычным участником в группе {self.discussion_id}. "
+                        "Из-за Group Privacy Mode в Telegram бот НЕ будет получать автофорварды постов! "
+                        "Обязательно назначьте бота администратором группы обсуждений "
+                        "или отключите Privacy Mode через @BotFather (/setprivacy -> Disable)."
+                    )
                 else:
                     logger.warning(f"⚠️ Статус бота в группе {self.discussion_id}: {member.status}")
             except Exception as e:
@@ -93,6 +98,61 @@ class TelegramBridge:
                     f"❌ ВНИМАНИЕ: Бот НЕ добавлен в группу обсуждений {self.discussion_id}! "
                     f"Ошибка: {e}. Обязательно добавьте бота в группу обсуждений и сделайте его администратором!"
                 )
+
+    async def resolve_missing_discussions(self, posts_missing: List[dict]) -> dict:
+        """
+        Сканирует группу обсуждений и находит discussion_msg_id для постов,
+        у которых автофорвард был пропущен (например, если бот не был админом).
+        Возвращает словарь {tg_channel_msg_id: tg_discussion_msg_id}.
+        """
+        if not self.discussion_id or not posts_missing:
+            return {}
+
+        target_map = {p["tg_channel_msg_id"]: p.get("vk_post_id") for p in posts_missing}
+        resolved = {}
+
+        try:
+            # Отправляем временный маркер, чтобы узнать максимальный message_id в группе
+            marker = await self.bot.send_message(chat_id=self.discussion_id, text=".")
+            top_id = marker.message_id
+            await self.bot.delete_message(chat_id=self.discussion_id, message_id=top_id)
+        except Exception as e:
+            logger.debug(f"Не удалось отправить маркер в группу обсуждений: {e}")
+            return {}
+
+        # Ищем совпадения в последних сообщениях группы обсуждений (до 100 сообщений назад)
+        start_id = max(1, top_id - 100)
+        for mid in range(top_id - 1, start_id - 1, -1):
+            if not target_map:
+                break
+            try:
+                fwd = await self.bot.forward_message(
+                    chat_id=self.discussion_id,
+                    from_chat_id=self.discussion_id,
+                    message_id=mid
+                )
+                try:
+                    orig_channel_msg_id = getattr(fwd, "forward_from_message_id", None)
+                    if not orig_channel_msg_id and hasattr(fwd, "forward_origin"):
+                        origin = getattr(fwd, "forward_origin", None)
+                        origin_type = getattr(origin, "type", "")
+                        if origin and (origin_type == "channel" or str(origin_type).lower().endswith("channel")):
+                            orig_channel_msg_id = getattr(origin, "message_id", None)
+
+                    if orig_channel_msg_id and orig_channel_msg_id in target_map:
+                        vk_id = target_map.pop(orig_channel_msg_id)
+                        resolved[orig_channel_msg_id] = mid
+                        logger.info(
+                            f"🔍 Автоматически найден discussion_msg_id={mid} "
+                            f"для поста VK {vk_id} (channel_msg_id={orig_channel_msg_id})"
+                        )
+                finally:
+                    await self.bot.delete_message(chat_id=self.discussion_id, message_id=fwd.message_id)
+            except Exception:
+                # Служебные или недоступные для пересылки сообщения пропускаем
+                continue
+
+        return resolved
 
     async def send_post(self, post: VKPost, vk_client: VKClient) -> Optional[int]:
         """

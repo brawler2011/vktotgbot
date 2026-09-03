@@ -113,6 +113,24 @@ class Database:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_post_by_channel_msg_id(self, tg_channel_msg_id: int) -> Optional[dict]:
+        """Возвращает пост по message_id в Telegram-канале."""
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM posts WHERE tg_channel_msg_id = ?;", 
+                (tg_channel_msg_id,)
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def get_posts_without_discussion_id(self) -> List[dict]:
+        """Возвращает посты, у которых еще не привязан tg_discussion_msg_id."""
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM posts WHERE tg_discussion_msg_id IS NULL ORDER BY vk_post_id DESC;"
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_recent_posts(self, limit: int = 20) -> List[dict]:
         """Возвращает недавние посты для проверки комментариев."""
         with self._get_connection() as conn:
