@@ -173,11 +173,6 @@ class TelegramBridge:
         if extra_parts:
             full_content = f"{full_content}\n\n" + "\n\n".join(extra_parts) if full_content else "\n\n".join(extra_parts)
 
-        # Кнопка со ссылкой на оригинал в ВК
-        reply_markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton(text="🔗 Оригинал ВКонтакте", url=post.vk_url)]
-        ])
-
         channel_msg_id: Optional[int] = None
 
         try:
@@ -193,8 +188,7 @@ class TelegramBridge:
                             chat_id=self.channel_id,
                             photo=photo_url,
                             caption=caption,
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=reply_markup
+                            parse_mode=ParseMode.HTML
                         )
                         channel_msg_id = msg.message_id
                     else:
@@ -207,8 +201,7 @@ class TelegramBridge:
                         msg_text = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=f"{full_content}\n\n{orig_link}",
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=reply_markup
+                            parse_mode=ParseMode.HTML
                         )
                         # Запоминаем ID текста, так как он обычно замыкает пост
                         channel_msg_id = msg_text.message_id
@@ -236,8 +229,7 @@ class TelegramBridge:
                         msg_text = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=f"{full_content}\n\n{orig_link}",
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=reply_markup
+                            parse_mode=ParseMode.HTML
                         )
                         channel_msg_id = msg_text.message_id
 
@@ -247,21 +239,18 @@ class TelegramBridge:
                 # Если текст > 4096, делим на части
                 if len(text_to_send) > MAX_MESSAGE_LEN:
                     chunks = [text_to_send[i:i + 4000] for i in range(0, len(text_to_send), 4000)]
-                    for idx, chunk in enumerate(chunks):
-                        markup = reply_markup if idx == len(chunks) - 1 else None
+                    for chunk in chunks:
                         msg = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=chunk,
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=markup
+                            parse_mode=ParseMode.HTML
                         )
                         channel_msg_id = msg.message_id
                 else:
                     msg = await self.bot.send_message(
                         chat_id=self.channel_id,
                         text=text_to_send,
-                        parse_mode=ParseMode.HTML,
-                        reply_markup=reply_markup
+                        parse_mode=ParseMode.HTML
                     )
                     channel_msg_id = msg.message_id
 
