@@ -66,7 +66,7 @@ class TelegramBridge:
         self.discussion_id = discussion_id
 
     async def init(self) -> None:
-        """Определяет linked_chat_id (обсуждение), если оно не задано вручную."""
+        """Определяет linked_chat_id (обсуждение), если оно не задано вручную, и проверяет права."""
         if not self.discussion_id:
             try:
                 chat = await self.bot.get_chat(chat_id=self.channel_id)
@@ -74,9 +74,25 @@ class TelegramBridge:
                     self.discussion_id = str(chat.linked_chat_id)
                     logger.info(f"Найдена привязанная группа обсуждений: {self.discussion_id}")
                 else:
-                    logger.warning("К каналу пока не привязана группа обсуждений. Комментарии не будут отправляться в ветку.")
+                    logger.warning("⚠️ К каналу пока не привязана группа обсуждений. Комментарии не будут отправляться в ветку.")
             except Exception as e:
                 logger.error(f"Не удалось получить информацию о канале {self.channel_id}: {e}")
+
+        if self.discussion_id:
+            try:
+                me = await self.bot.get_me()
+                member = await self.bot.get_chat_member(chat_id=self.discussion_id, user_id=me.id)
+                if member.status in ("administrator", "creator"):
+                    logger.info(f"✅ Бот подтверждён как администратор группы обсуждений ({self.discussion_id})")
+                elif member.status == "member":
+                    logger.warning(f"⚠️ Бот является обычным участником в группе {self.discussion_id}. Рекомендуется дать права администратора.")
+                else:
+                    logger.warning(f"⚠️ Статус бота в группе {self.discussion_id}: {member.status}")
+            except Exception as e:
+                logger.error(
+                    f"❌ ВНИМАНИЕ: Бот НЕ добавлен в группу обсуждений {self.discussion_id}! "
+                    f"Ошибка: {e}. Обязательно добавьте бота в группу обсуждений и сделайте его администратором!"
+                )
 
     async def send_post(self, post: VKPost, vk_client: VKClient) -> Optional[int]:
         """
