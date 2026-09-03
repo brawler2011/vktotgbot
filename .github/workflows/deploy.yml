@@ -1,0 +1,80 @@
+name: CI/CD Deploy via SSH
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Lint & Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run syntax checks
+        run: |
+          python -m py_compile config.py database.py vk_client.py tg_bot.py main.py
+
+  deploy:
+    name: Deploy to Server
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          passphrase: ${{ secrets.SSH_PASSPHRASE || '' }}
+          script_stop: true
+          script: |
+            set -e
+
+            TARGET_DIR="${{ secrets.SERVER_PATH || '~/vktotg' }}"
+            echo "🚀 Начало деплоя в директорию: $TARGET_DIR"
+
+            # Переходим в директорию проекта
+            cd "$TARGET_DIR"
+
+            # Обновляем репозиторий
+            echo "📥 Загрузка последних изменений из Git..."
+            git fetch origin
+            CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+            git reset --hard "origin/$CURRENT_BRANCH"
+
+            # Проверяем наличие файла .env
+            if [ ! -f .env ]; then
+              echo "⚠️ Внимание: файл .env не найден в $TARGET_DIR!"
+              echo "Пожалуйста, создайте .env на сервере перед запуском."
+              exit 1
+            fi
+
+            # Пересборка и запуск контейнеров через Docker Compose
+            echo "🐳 Пересборка и перезапуск Docker Compose..."
+            docker compose down --remove-orphans || true
+            docker compose up -d --build
+
+            # Очистка неиспользуемых старых образов
+            docker image prune -f
+
+            echo "✅ Деплой успешно завершён!"
