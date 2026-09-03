@@ -83,9 +83,10 @@ async def sync_post_comments(post_data: dict):
 async def poll_vk_cycle():
     """Один цикл проверки постов и комментариев из ВК."""
     try:
-        # 1. Проверяем новые посты
+        # 1. Запрашиваем свежие посты (всего 1 запрос к VK API)
         posts = await vk_client.get_posts(count=10)
-        # Обрабатываем от старых к новым
+
+        # 2. Проверяем новые посты
         new_posts = [p for p in posts if not db.post_exists(p.id)]
         new_posts.reverse()
 
@@ -93,22 +94,35 @@ async def poll_vk_cycle():
             logger.info(f"🆕 Обнаружен новый пост VK {post.id}")
             channel_msg_id = await tg_bridge.send_post(post, vk_client)
             if channel_msg_id:
-                db.save_post(post.id, channel_msg_id, post.date)
+                db.save_post(post.id, channel_msg_id, post.date, post.comments_count)
                 # Даём Telegram пару секунд на автоматический форвард в группу обсуждений
                 await asyncio.sleep(3)
                 
-                # Пробуем сразу отправить существующие комментарии, если они уже есть
-                stored_post = db.get_post(post.id)
-                if stored_post:
-                    await sync_post_comments(stored_post)
+                # Отправляем существующие комментарии, если они есть
+                if post.comments_count > 0:
+                    stored_post = db.get_post(post.id)
+                    if stored_post:
+                        await sync_post_comments(stored_post)
 
             await asyncio.sleep(1.5)
 
-        # 2. Проверяем новые комментарии к недавним постам
-        recent_posts = db.get_recent_posts(limit=15)
-        for post_data in recent_posts:
-            await sync_post_comments(post_data)
-            await asyncio.sleep(0.3)
+        # 3. Умная проверка комментариев к существующим постам
+        # Запрашиваем комментарии ТОЛЬКО если их количество реально увеличилось!
+        for post in posts:
+            if not db.post_exists(post.id):
+                continue
+
+            stored_count = db.get_stored_comments_count(post.id)
+            if post.comments_count > stored_count:
+                logger.info(
+                    f"💬 Обнаружены новые комментарии к посту {post.id}: "
+                    f"было {stored_count}, стало {post.comments_count}"
+                )
+                stored_post = db.get_post(post.id)
+                if stored_post:
+                    await sync_post_comments(stored_post)
+                db.update_comments_count(post.id, post.comments_count)
+                await asyncio.sleep(0.5)
 
     except Exception as e:
         logger.error(f"Ошибка в цикле опроса VK: {e}", exc_info=True)
@@ -125,12 +139,13 @@ async def initial_sync():
             logger.info(f"Публикация начального поста VK {post.id}...")
             channel_msg_id = await tg_bridge.send_post(post, vk_client)
             if channel_msg_id:
-                db.save_post(post.id, channel_msg_id, post.date)
+                db.save_post(post.id, channel_msg_id, post.date, post.comments_count)
                 # Ждем форвард в группу
                 await asyncio.sleep(3)
-                stored_post = db.get_post(post.id)
-                if stored_post:
-                    await sync_post_comments(stored_post)
+                if post.comments_count > 0:
+                    stored_post = db.get_post(post.id)
+                    if stored_post:
+                        await sync_post_comments(stored_post)
 
             await asyncio.sleep(2)
 

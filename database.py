@@ -25,9 +25,16 @@ class Database:
                     tg_channel_msg_id INTEGER NOT NULL,
                     tg_discussion_msg_id INTEGER,
                     post_date INTEGER,
+                    comments_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            # Auto-migrate if table existed without comments_count
+            try:
+                conn.execute("ALTER TABLE posts ADD COLUMN comments_count INTEGER DEFAULT 0;")
+            except sqlite3.OperationalError:
+                pass
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS comments (
                     vk_comment_id INTEGER PRIMARY KEY,
@@ -59,16 +66,30 @@ class Database:
             cur = conn.execute("SELECT 1 FROM posts WHERE vk_post_id = ?;", (vk_post_id,))
             return cur.fetchone() is not None
 
-    def save_post(self, vk_post_id: int, tg_channel_msg_id: int, post_date: int = 0) -> None:
+    def save_post(self, vk_post_id: int, tg_channel_msg_id: int, post_date: int = 0, comments_count: int = 0) -> None:
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO posts (vk_post_id, tg_channel_msg_id, post_date)
-                VALUES (?, ?, ?);
+                INSERT OR REPLACE INTO posts (vk_post_id, tg_channel_msg_id, post_date, comments_count)
+                VALUES (?, ?, ?, ?);
                 """,
-                (vk_post_id, tg_channel_msg_id, post_date)
+                (vk_post_id, tg_channel_msg_id, post_date, comments_count)
             )
             conn.commit()
+
+    def update_comments_count(self, vk_post_id: int, comments_count: int) -> None:
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE posts SET comments_count = ? WHERE vk_post_id = ?;",
+                (comments_count, vk_post_id)
+            )
+            conn.commit()
+
+    def get_stored_comments_count(self, vk_post_id: int) -> int:
+        with self._get_connection() as conn:
+            cur = conn.execute("SELECT comments_count FROM posts WHERE vk_post_id = ?;", (vk_post_id,))
+            row = cur.fetchone()
+            return row["comments_count"] if row and row["comments_count"] is not None else 0
 
     def update_discussion_msg_id(self, tg_channel_msg_id: int, tg_discussion_msg_id: int) -> None:
         """Сохраняет связку пересланного сообщения в группе обсуждений."""

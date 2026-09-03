@@ -33,6 +33,7 @@ class VKPost:
     photos: List[PhotoAttachment] = field(default_factory=list)
     docs: List[DocAttachment] = field(default_factory=list)
     extra_links: List[str] = field(default_factory=list)
+    comments_count: int = 0
 
     @property
     def vk_url(self) -> str:
@@ -174,6 +175,7 @@ class VKClient:
                 raw_attachments.extend(repost.get("attachments", []))
 
             photos, docs, extra_links = self._extract_attachments(raw_attachments)
+            comments_count = item.get("comments", {}).get("count", 0)
 
             posts.append(VKPost(
                 id=item["id"],
@@ -182,7 +184,8 @@ class VKClient:
                 date=item.get("date", 0),
                 photos=photos,
                 docs=docs,
-                extra_links=extra_links
+                extra_links=extra_links,
+                comments_count=comments_count
             ))
 
         return posts
