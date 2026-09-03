@@ -58,7 +58,7 @@ jobs:
           envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHANNEL_ID,TELEGRAM_DISCUSSION_ID,VK_ACCESS_TOKEN,VK_GROUP_DOMAIN,POLL_INTERVAL,INITIAL_POSTS_COUNT,ENV_CONTENT
           script_stop: true
           script: |
-            set -e
+            set -ex
 
             eval TARGET_DIR="${{ secrets.SERVER_PATH || '~/vktotg' }}"
             echo "🚀 Развёртывание в директорию: $TARGET_DIR"
@@ -92,23 +92,44 @@ jobs:
               echo "DATABASE_PATH=data/bot.db" >> .env
             fi
             chmod 600 .env
+            echo "✅ Файл .env успешно записан"
 
-            # 3. Определение команды Docker Compose
+            # 3. Диагностика Docker и Docker Compose
+            echo "🔍 Определение Docker Compose и проверка прав..."
+            COMPOSE_CMD=""
+
             if docker compose version >/dev/null 2>&1; then
               COMPOSE_CMD="docker compose"
+            elif sudo -n docker compose version >/dev/null 2>&1; then
+              COMPOSE_CMD="sudo docker compose"
             elif command -v docker-compose >/dev/null 2>&1; then
               COMPOSE_CMD="docker-compose"
-            else
-              echo "❌ Ошибка: Docker Compose не установлен на сервере!"
+            elif sudo -n command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE_CMD="sudo docker-compose"
+            fi
+
+            if [ -z "$COMPOSE_CMD" ]; then
+              echo "❌ Ошибка: Docker или Docker Compose не найден, либо у пользователя нет прав!"
+              echo "Пользователь: $(whoami)"
+              echo "Docker binary: $(which docker || echo 'не найден')"
+              echo ""
+              echo "👉 Если Docker установлен, выдайте пользователю права без sudo:"
+              echo "   sudo usermod -aG docker $(whoami)"
+              echo "   newgrp docker"
+              echo ""
+              echo "👉 Если Docker не установлен на сервере, установите его:"
+              echo "   curl -fsSL https://get.docker.com | sh"
               exit 1
             fi
 
+            echo "🐳 Используется команда: $COMPOSE_CMD"
+
             # 4. Запуск контейнеров
-            echo "🐳 Перезапуск контейнеров через $COMPOSE_CMD..."
+            echo "🐳 Перезапуск контейнеров..."
             $COMPOSE_CMD down --remove-orphans || true
             $COMPOSE_CMD up -d --build
 
-            # Очистка неиспользуемых образов
-            docker image prune -f || true
+            # Очистка старых образов
+            docker image prune -f 2>/dev/null || sudo -n docker image prune -f 2>/dev/null || true
 
             echo "✅ Деплой успешно завершён!"
