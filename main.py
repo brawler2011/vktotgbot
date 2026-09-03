@@ -15,6 +15,8 @@ from database import Database
 from vk_client import VKClient
 from tg_bot import TelegramBridge
 
+import collections
+
 # Logging configuration
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -91,6 +93,9 @@ async def resolve_missing_discussions_if_needed():
             db.update_comments_count(post["vk_post_id"], len(vk_comments))
 
 
+post_locks: collections.defaultdict[int, asyncio.Lock] = collections.defaultdict(asyncio.Lock)
+
+
 async def sync_post_comments(post_data: dict):
     """Синхронизирует новые комментарии для конкретного поста."""
     vk_post_id = post_data["vk_post_id"]
@@ -100,15 +105,16 @@ async def sync_post_comments(post_data: dict):
         logger.debug(f"У поста VK {vk_post_id} еще не определен discussion_msg_id")
         return
 
-    comments = await vk_client.get_comments(vk_post_id)
-    for comment in comments:
-        if db.comment_exists(comment.id):
-            continue
+    async with post_locks[vk_post_id]:
+        comments = await vk_client.get_comments(vk_post_id)
+        for comment in comments:
+            if db.comment_exists(comment.id):
+                continue
 
-        sent_id = await tg_bridge.send_comment(comment, discussion_msg_id, vk_client)
-        if sent_id:
-            db.save_comment(comment.id, vk_post_id, sent_id)
-            await asyncio.sleep(0.5)
+            sent_id = await tg_bridge.send_comment(comment, discussion_msg_id, vk_client)
+            if sent_id:
+                db.save_comment(comment.id, vk_post_id, sent_id)
+                await asyncio.sleep(0.5)
 
 
 async def poll_vk_cycle():
