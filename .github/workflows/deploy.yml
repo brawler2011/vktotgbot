@@ -60,43 +60,55 @@ jobs:
           script: |
             set -e
 
-            TARGET_DIR="${{ secrets.SERVER_PATH || '~/vktotg' }}"
-            echo "🚀 Начало деплоя в директорию: $TARGET_DIR"
+            eval TARGET_DIR="${{ secrets.SERVER_PATH || '~/vktotg' }}"
+            echo "🚀 Развёртывание в директорию: $TARGET_DIR"
 
             mkdir -p "$TARGET_DIR"
             cd "$TARGET_DIR"
 
-            # Обновление репозитория
-            if [ -d .git ]; then
-              echo "📥 Загрузка последних изменений из Git..."
+            # 1. Проверяем наличие репозитория на сервере, если нет - клонируем автоматически
+            if [ ! -f "docker-compose.yml" ] && [ ! -d ".git" ]; then
+              echo "📥 Репозиторий ещё не склонирован. Автоматическое клонирование..."
+              git clone https://github.com/${{ github.repository }}.git .
+            elif [ -d ".git" ]; then
+              echo "📥 Обновление репозитория через Git..."
               git fetch origin
               CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
               git reset --hard "origin/$CURRENT_BRANCH" || git reset --hard origin/main || git reset --hard origin/master
             fi
 
-            # Генерация .env из GitHub Actions Secrets
-            echo "🔐 Инъекция переменных окружения из GitHub Actions Secrets..."
+            # 2. Инъекция переменных окружения в .env
+            echo "🔐 Запись конфигурации .env из GitHub Actions Secrets..."
             if [ -n "$ENV_CONTENT" ]; then
-              printf "%s\n" "$ENV_CONTENT" > .env
+              echo "$ENV_CONTENT" > .env
             else
-              printf "%s\n" \
-                "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" \
-                "TELEGRAM_CHANNEL_ID=$TELEGRAM_CHANNEL_ID" \
-                "TELEGRAM_DISCUSSION_ID=$TELEGRAM_DISCUSSION_ID" \
-                "VK_ACCESS_TOKEN=$VK_ACCESS_TOKEN" \
-                "VK_GROUP_DOMAIN=$VK_GROUP_DOMAIN" \
-                "POLL_INTERVAL=$POLL_INTERVAL" \
-                "INITIAL_POSTS_COUNT=$INITIAL_POSTS_COUNT" \
-                "DATABASE_PATH=data/bot.db" > .env
+              echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" > .env
+              echo "TELEGRAM_CHANNEL_ID=$TELEGRAM_CHANNEL_ID" >> .env
+              echo "TELEGRAM_DISCUSSION_ID=$TELEGRAM_DISCUSSION_ID" >> .env
+              echo "VK_ACCESS_TOKEN=$VK_ACCESS_TOKEN" >> .env
+              echo "VK_GROUP_DOMAIN=$VK_GROUP_DOMAIN" >> .env
+              echo "POLL_INTERVAL=$POLL_INTERVAL" >> .env
+              echo "INITIAL_POSTS_COUNT=$INITIAL_POSTS_COUNT" >> .env
+              echo "DATABASE_PATH=data/bot.db" >> .env
             fi
             chmod 600 .env
 
-            # Пересборка и запуск контейнеров через Docker Compose
-            echo "🐳 Пересборка и перезапуск Docker Compose..."
-            docker compose down --remove-orphans || true
-            docker compose up -d --build
+            # 3. Определение команды Docker Compose
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE_CMD="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE_CMD="docker-compose"
+            else
+              echo "❌ Ошибка: Docker Compose не установлен на сервере!"
+              exit 1
+            fi
 
-            # Очистка неиспользуемых старых образов
-            docker image prune -f
+            # 4. Запуск контейнеров
+            echo "🐳 Перезапуск контейнеров через $COMPOSE_CMD..."
+            $COMPOSE_CMD down --remove-orphans || true
+            $COMPOSE_CMD up -d --build
+
+            # Очистка неиспользуемых образов
+            docker image prune -f || true
 
             echo "✅ Деплой успешно завершён!"
