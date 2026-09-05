@@ -131,9 +131,12 @@ async def poll_vk_cycle():
             logger.info(f"🆕 Обнаружен новый пост VK {post.id}")
             channel_msg_id = await tg_bridge.send_post(post, vk_client)
             if channel_msg_id:
-                # Сохраняем с comments_count=0, чтобы если обсуждение привязалось позже, бот дослал комменты
+                # В топике супергруппы ID поста сразу является целевым ID для комментариев
                 db.save_post(post.id, channel_msg_id, post.date, comments_count=0)
-                await asyncio.sleep(3)
+                if tg_bridge.topic_id:
+                    db.update_discussion_msg_id(channel_msg_id, channel_msg_id)
+
+                await asyncio.sleep(1.5)
                 
                 if post.comments_count > 0:
                     stored_post = db.get_post(post.id)
@@ -144,8 +147,9 @@ async def poll_vk_cycle():
             await asyncio.sleep(1.5)
 
         # 3. Проверка комментариев к существующим постам
-        # Если есть посты без привязки к обсуждению, пытаемся их восстановить
-        await resolve_missing_discussions_if_needed()
+        # В режиме канала пытаемся привязать пропущенные обсуждения
+        if not tg_bridge.topic_id:
+            await resolve_missing_discussions_if_needed()
 
         # Проверяем посты, где есть новые неотправленные комментарии
         for post in posts:
@@ -179,9 +183,11 @@ async def initial_sync():
             logger.info(f"Публикация начального поста VK {post.id}...")
             channel_msg_id = await tg_bridge.send_post(post, vk_client)
             if channel_msg_id:
-                # Начальный comments_count=0, чтобы дослать комменты, как только появится discussion_msg_id
                 db.save_post(post.id, channel_msg_id, post.date, comments_count=0)
-                await asyncio.sleep(3)
+                if tg_bridge.topic_id:
+                    db.update_discussion_msg_id(channel_msg_id, channel_msg_id)
+
+                await asyncio.sleep(2)
                 if post.comments_count > 0:
                     stored_post = db.get_post(post.id)
                     if stored_post and stored_post.get("tg_discussion_msg_id"):
@@ -190,8 +196,9 @@ async def initial_sync():
 
             await asyncio.sleep(2)
 
-        # Пытаемся привязать обсуждения, если Telegram задержал автофорварды
-        await resolve_missing_discussions_if_needed()
+        # Пытаемся привязать обсуждения, если работаем в режиме канала
+        if not tg_bridge.topic_id:
+            await resolve_missing_discussions_if_needed()
 
         logger.info("✅ Первоначальная синхронизация успешно завершена!")
     except Exception as e:
@@ -207,7 +214,8 @@ async def vk_poller_task():
         await initial_sync()
     else:
         # При перезапуске проверяем, нет ли постов с непривязанным обсуждением
-        await resolve_missing_discussions_if_needed()
+        if not tg_bridge.topic_id:
+            await resolve_missing_discussions_if_needed()
 
     logger.info(f"🚀 Запущен регулярный опрос VK (интервал: {config.POLL_INTERVAL} сек)")
     while True:
@@ -243,7 +251,8 @@ def main():
     tg_bridge = TelegramBridge(
         bot_token=config.TELEGRAM_BOT_TOKEN,
         channel_id=config.TELEGRAM_CHANNEL_ID,
-        discussion_id=config.TELEGRAM_DISCUSSION_ID or None
+        discussion_id=config.TELEGRAM_DISCUSSION_ID or None,
+        topic_id=config.TELEGRAM_TOPIC_ID
     )
 
     app = (

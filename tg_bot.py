@@ -60,13 +60,29 @@ def format_vk_text(text: str) -> str:
 
 
 class TelegramBridge:
-    def __init__(self, bot_token: str, channel_id: str, discussion_id: Optional[str] = None):
+    def __init__(
+        self,
+        bot_token: str,
+        channel_id: str,
+        discussion_id: Optional[str] = None,
+        topic_id: Optional[int] = None
+    ):
         self.bot = Bot(token=bot_token)
         self.channel_id = channel_id
         self.discussion_id = discussion_id
+        self.topic_id = topic_id
 
     async def init(self) -> None:
         """Определяет linked_chat_id (обсуждение), если оно не задано вручную, и проверяет права."""
+        if self.topic_id:
+            try:
+                me = await self.bot.get_me()
+                member = await self.bot.get_chat_member(chat_id=self.channel_id, user_id=me.id)
+                logger.info(f"✅ Бот подтверждён в супергруппе {self.channel_id} (статус: {member.status}), топик: {self.topic_id}")
+            except Exception as e:
+                logger.error(f"Не удалось проверить статус бота в группе {self.channel_id}: {e}")
+            return
+
         if not self.discussion_id:
             try:
                 chat = await self.bot.get_chat(chat_id=self.channel_id)
@@ -174,6 +190,9 @@ class TelegramBridge:
             full_content = f"{full_content}\n\n" + "\n\n".join(extra_parts) if full_content else "\n\n".join(extra_parts)
 
         channel_msg_id: Optional[int] = None
+        post_kwargs = {}
+        if self.topic_id:
+            post_kwargs["message_thread_id"] = self.topic_id
 
         try:
             # Сценарий 1: Есть фотографии
@@ -188,20 +207,23 @@ class TelegramBridge:
                             chat_id=self.channel_id,
                             photo=photo_url,
                             caption=caption,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
                         channel_msg_id = msg.message_id
                     else:
                         # Текст слишком длинный: сначала фото, потом текст
                         msg_photo = await self.bot.send_photo(
                             chat_id=self.channel_id,
-                            photo=photo_url
+                            photo=photo_url,
+                            **post_kwargs
                         )
                         channel_msg_id = msg_photo.message_id
                         msg_text = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=f"{full_content}\n\n{orig_link}",
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
                         # Запоминаем ID текста, так как он обычно замыкает пост
                         channel_msg_id = msg_text.message_id
@@ -220,7 +242,8 @@ class TelegramBridge:
 
                     msgs = await self.bot.send_media_group(
                         chat_id=self.channel_id,
-                        media=media_group
+                        media=media_group,
+                        **post_kwargs
                     )
                     channel_msg_id = msgs[0].message_id
 
@@ -229,7 +252,8 @@ class TelegramBridge:
                         msg_text = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=f"{full_content}\n\n{orig_link}",
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
                         channel_msg_id = msg_text.message_id
 
@@ -243,14 +267,16 @@ class TelegramBridge:
                         msg = await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=chunk,
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
                         channel_msg_id = msg.message_id
                 else:
                     msg = await self.bot.send_message(
                         chat_id=self.channel_id,
                         text=text_to_send,
-                        parse_mode=ParseMode.HTML
+                        parse_mode=ParseMode.HTML,
+                        **post_kwargs
                     )
                     channel_msg_id = msg.message_id
 
@@ -265,7 +291,8 @@ class TelegramBridge:
                             chat_id=self.channel_id,
                             document=file_io,
                             caption=f"📎 {html.escape(doc.title)}",
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
                     except Exception as e:
                         logger.warning(f"Не удалось отправить документ {doc.title}: {e}")
@@ -273,10 +300,11 @@ class TelegramBridge:
                         await self.bot.send_message(
                             chat_id=self.channel_id,
                             text=f"📎 <a href='{doc.url}'>{html.escape(doc.title)}</a>",
-                            parse_mode=ParseMode.HTML
+                            parse_mode=ParseMode.HTML,
+                            **post_kwargs
                         )
 
-            logger.info(f"Пост VK {post.id} успешно опубликован в канал (message_id={channel_msg_id})")
+            logger.info(f"Пост VK {post.id} успешно опубликован (message_id={channel_msg_id})")
             return channel_msg_id
 
         except Exception as e:
@@ -285,10 +313,11 @@ class TelegramBridge:
 
     async def send_comment(self, comment: VKComment, discussion_msg_id: int, vk_client: VKClient) -> Optional[int]:
         """
-        Публикует комментарий из ВК в ветку обсуждения конкретного поста.
+        Публикует комментарий из ВК в ветку обсуждения конкретного поста или топик супергруппы.
         """
-        if not self.discussion_id:
-            logger.debug("Пропуск комментария: discussion_id не задан")
+        target_chat_id = self.channel_id if self.topic_id else self.discussion_id
+        if not target_chat_id:
+            logger.debug("Пропуск комментария: целевой chat_id не задан")
             return None
 
         formatted_text = format_vk_text(comment.text)
@@ -308,10 +337,13 @@ class TelegramBridge:
         else:
             reply_kwargs["reply_to_message_id"] = discussion_msg_id
 
+        if self.topic_id:
+            reply_kwargs["message_thread_id"] = self.topic_id
+
         try:
             # Отправка текста комментария
             msg = await self.bot.send_message(
-                chat_id=self.discussion_id,
+                chat_id=target_chat_id,
                 text=comment_body,
                 parse_mode=ParseMode.HTML,
                 **reply_kwargs
@@ -322,7 +354,7 @@ class TelegramBridge:
             if comment.photos:
                 for p in comment.photos[:5]:
                     await self.bot.send_photo(
-                        chat_id=self.discussion_id,
+                        chat_id=target_chat_id,
                         photo=p.url,
                         **reply_kwargs
                     )
@@ -335,7 +367,7 @@ class TelegramBridge:
                         file_io = io.BytesIO(file_bytes)
                         file_io.name = doc.title
                         await self.bot.send_document(
-                            chat_id=self.discussion_id,
+                            chat_id=target_chat_id,
                             document=file_io,
                             caption=f"📎 {html.escape(doc.title)}",
                             parse_mode=ParseMode.HTML,

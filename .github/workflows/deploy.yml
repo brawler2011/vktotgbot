@@ -44,6 +44,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           TELEGRAM_DISCUSSION_ID: ${{ secrets.TELEGRAM_DISCUSSION_ID }}
+          TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
           VK_ACCESS_TOKEN: ${{ secrets.VK_ACCESS_TOKEN }}
           VK_GROUP_DOMAIN: ${{ vars.VK_GROUP_DOMAIN || secrets.VK_GROUP_DOMAIN || 'irs2027' }}
           POLL_INTERVAL: ${{ vars.POLL_INTERVAL || secrets.POLL_INTERVAL || '10' }}
@@ -54,7 +55,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           passphrase: ${{ secrets.SSH_PASSPHRASE || '' }}
-          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHANNEL_ID,TELEGRAM_DISCUSSION_ID,VK_ACCESS_TOKEN,VK_GROUP_DOMAIN,POLL_INTERVAL,INITIAL_POSTS_COUNT
+          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHANNEL_ID,TELEGRAM_DISCUSSION_ID,TELEGRAM_TOPIC_ID,VK_ACCESS_TOKEN,VK_GROUP_DOMAIN,POLL_INTERVAL,INITIAL_POSTS_COUNT
           script_stop: false
           script: |
             set -e
@@ -81,6 +82,7 @@ jobs:
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" > .env
             echo "TELEGRAM_CHANNEL_ID=$TELEGRAM_CHANNEL_ID" >> .env
             echo "TELEGRAM_DISCUSSION_ID=$TELEGRAM_DISCUSSION_ID" >> .env
+            echo "TELEGRAM_TOPIC_ID=$TELEGRAM_TOPIC_ID" >> .env
             echo "VK_ACCESS_TOKEN=$VK_ACCESS_TOKEN" >> .env
             echo "VK_GROUP_DOMAIN=$VK_GROUP_DOMAIN" >> .env
             echo "POLL_INTERVAL=$POLL_INTERVAL" >> .env

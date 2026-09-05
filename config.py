@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 # Load .env if present
@@ -11,6 +12,11 @@ class Config:
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
     TELEGRAM_DISCUSSION_ID: str = os.getenv("TELEGRAM_DISCUSSION_ID", "").strip()
+    TELEGRAM_TOPIC_ID: Optional[int] = (
+        int(os.getenv("TELEGRAM_TOPIC_ID").strip())
+        if os.getenv("TELEGRAM_TOPIC_ID") and os.getenv("TELEGRAM_TOPIC_ID").strip().isdigit()
+        else None
+    )
 
     VK_ACCESS_TOKEN: str = os.getenv("VK_ACCESS_TOKEN", "").strip()
     VK_GROUP_DOMAIN: str = os.getenv("VK_GROUP_DOMAIN", "irs2027").strip()
