@@ -121,6 +121,19 @@ class Database:
             row = cur.fetchone()
             return row["cnt"] if row else 0
 
+    def clean_deleted_comments(self, vk_post_id: int, active_comment_ids: List[int]) -> None:
+        """Удаляет из базы комментарии, которые были удалены в ВК."""
+        with self._get_connection() as conn:
+            if active_comment_ids:
+                placeholders = ",".join("?" for _ in active_comment_ids)
+                conn.execute(
+                    f"DELETE FROM comments WHERE vk_post_id = ? AND vk_comment_id NOT IN ({placeholders});",
+                    [vk_post_id, *active_comment_ids]
+                )
+            else:
+                conn.execute("DELETE FROM comments WHERE vk_post_id = ?;", (vk_post_id,))
+            conn.commit()
+
     def get_post(self, vk_post_id: int) -> Optional[dict]:
         with self._get_connection() as conn:
             cur = conn.execute(

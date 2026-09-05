@@ -87,6 +87,10 @@ async def sync_post_comments(post_data: dict):
 
     async with post_locks[vk_post_id]:
         comments = await vk_client.get_comments(vk_post_id)
+        # Синхронизируем активные комментарии, удаляя удалённые из базы
+        active_ids = [c.id for c in comments]
+        db.clean_deleted_comments(vk_post_id, active_ids)
+
         for comment in comments:
             if db.comment_exists(comment.id):
                 continue
@@ -140,6 +144,17 @@ async def poll_vk_cycle():
 
             stored_count = db.get_stored_comments_count(post.id)
             synced_count = db.get_synced_comments_count(post.id)
+
+            # Если в ВК количество комментариев уменьшилось (комментарий удалили в ВК)
+            if post.comments_count < stored_count:
+                logger.info(
+                    f"🗑 В посте {post.id} уменьшилось число комментариев (было {stored_count}, стало {post.comments_count})"
+                )
+                db.update_comments_count(post.id, post.comments_count)
+                stored_post = db.get_post(post.id)
+                if stored_post:
+                    await sync_post_comments(stored_post)
+                continue
 
             # Проверяем, если в ВК появились новые комментарии, которых еще нет в Telegram
             if post.comments_count > stored_count or post.comments_count > synced_count:
