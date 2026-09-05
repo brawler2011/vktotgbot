@@ -65,12 +65,28 @@ class TelegramBridge:
         bot_token: str,
         channel_id: str,
         discussion_id: Optional[str] = None,
-        topic_id: Optional[int] = None
+        topic_id: Optional[int] = None,
+        admin_id: Optional[int] = None
     ):
         self.bot = Bot(token=bot_token)
         self.channel_id = channel_id
         self.discussion_id = discussion_id
         self.topic_id = topic_id
+        self.admin_id = admin_id
+
+    async def send_admin(self, text: str) -> None:
+        """Отправляет уведомление или лог администратору."""
+        if not self.admin_id:
+            return
+        try:
+            await self.bot.send_message(
+                chat_id=self.admin_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить уведомление администратору ({self.admin_id}): {e}")
 
     async def init(self) -> None:
         """Определяет linked_chat_id (обсуждение), если оно не задано вручную, и проверяет права."""

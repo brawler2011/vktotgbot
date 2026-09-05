@@ -17,6 +17,11 @@ class Config:
         if os.getenv("TELEGRAM_TOPIC_ID") and os.getenv("TELEGRAM_TOPIC_ID").strip().isdigit()
         else None
     )
+    ADMIN_TG_ID: Optional[int] = (
+        int(os.getenv("ADMIN_TG_ID").strip())
+        if os.getenv("ADMIN_TG_ID") and os.getenv("ADMIN_TG_ID").strip().lstrip("-").isdigit()
+        else None
+    )
 
     VK_ACCESS_TOKEN: str = os.getenv("VK_ACCESS_TOKEN", "").strip()
     VK_GROUP_DOMAIN: str = os.getenv("VK_GROUP_DOMAIN", "irs2027").strip()
