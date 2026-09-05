@@ -22,18 +22,30 @@ class Database:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS posts (
                     vk_post_id INTEGER PRIMARY KEY,
-                    tg_channel_msg_id INTEGER NOT NULL,
-                    tg_discussion_msg_id INTEGER,
+                    tg_post_msg_id INTEGER NOT NULL,
                     post_date INTEGER,
                     comments_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
-            # Auto-migrate if table existed without comments_count
-            try:
+
+            # Inspect columns for backward compatibility / migrations
+            cursor = conn.execute("PRAGMA table_info(posts);")
+            columns = [row["name"] for row in cursor.fetchall()]
+
+            if "tg_post_msg_id" not in columns:
+                conn.execute("ALTER TABLE posts ADD COLUMN tg_post_msg_id INTEGER;")
+
+            if "comments_count" not in columns:
                 conn.execute("ALTER TABLE posts ADD COLUMN comments_count INTEGER DEFAULT 0;")
-            except sqlite3.OperationalError:
-                pass
+
+            # Migrate legacy tg_channel_msg_id / tg_discussion_msg_id if present
+            if "tg_channel_msg_id" in columns:
+                conn.execute("""
+                    UPDATE posts 
+                    SET tg_post_msg_id = COALESCE(tg_post_msg_id, tg_channel_msg_id, tg_discussion_msg_id)
+                    WHERE tg_post_msg_id IS NULL;
+                """)
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS comments (
@@ -45,8 +57,8 @@ class Database:
                 );
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_posts_channel_msg 
-                ON posts (tg_channel_msg_id);
+                CREATE INDEX IF NOT EXISTS idx_posts_tg_msg 
+                ON posts (tg_post_msg_id);
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_comments_post 
@@ -66,15 +78,26 @@ class Database:
             cur = conn.execute("SELECT 1 FROM posts WHERE vk_post_id = ?;", (vk_post_id,))
             return cur.fetchone() is not None
 
-    def save_post(self, vk_post_id: int, tg_channel_msg_id: int, post_date: int = 0, comments_count: int = 0) -> None:
+    def save_post(self, vk_post_id: int, tg_post_msg_id: int, post_date: int = 0, comments_count: int = 0) -> None:
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO posts (vk_post_id, tg_channel_msg_id, post_date, comments_count)
-                VALUES (?, ?, ?, ?);
-                """,
-                (vk_post_id, tg_channel_msg_id, post_date, comments_count)
-            )
+            cursor = conn.execute("PRAGMA table_info(posts);")
+            columns = [row["name"] for row in cursor.fetchall()]
+            if "tg_channel_msg_id" in columns:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO posts (vk_post_id, tg_post_msg_id, tg_channel_msg_id, post_date, comments_count)
+                    VALUES (?, ?, ?, ?, ?);
+                    """,
+                    (vk_post_id, tg_post_msg_id, tg_post_msg_id, post_date, comments_count)
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO posts (vk_post_id, tg_post_msg_id, post_date, comments_count)
+                    VALUES (?, ?, ?, ?);
+                    """,
+                    (vk_post_id, tg_post_msg_id, post_date, comments_count)
+                )
             conn.commit()
 
     def update_comments_count(self, vk_post_id: int, comments_count: int) -> None:
@@ -91,18 +114,12 @@ class Database:
             row = cur.fetchone()
             return row["comments_count"] if row and row["comments_count"] is not None else 0
 
-    def update_discussion_msg_id(self, tg_channel_msg_id: int, tg_discussion_msg_id: int) -> None:
-        """Сохраняет связку пересланного сообщения в группе обсуждений."""
+    def get_synced_comments_count(self, vk_post_id: int) -> int:
+        """Возвращает количество реально пересланных в Telegram комментариев к посту."""
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE posts 
-                SET tg_discussion_msg_id = ? 
-                WHERE tg_channel_msg_id = ?;
-                """,
-                (tg_discussion_msg_id, tg_channel_msg_id)
-            )
-            conn.commit()
+            cur = conn.execute("SELECT COUNT(*) as cnt FROM comments WHERE vk_post_id = ?;", (vk_post_id,))
+            row = cur.fetchone()
+            return row["cnt"] if row else 0
 
     def get_post(self, vk_post_id: int) -> Optional[dict]:
         with self._get_connection() as conn:
@@ -111,25 +128,12 @@ class Database:
                 (vk_post_id,)
             )
             row = cur.fetchone()
-            return dict(row) if row else None
-
-    def get_post_by_channel_msg_id(self, tg_channel_msg_id: int) -> Optional[dict]:
-        """Возвращает пост по message_id в Telegram-канале."""
-        with self._get_connection() as conn:
-            cur = conn.execute(
-                "SELECT * FROM posts WHERE tg_channel_msg_id = ?;", 
-                (tg_channel_msg_id,)
-            )
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-    def get_posts_without_discussion_id(self) -> List[dict]:
-        """Возвращает посты, у которых еще не привязан tg_discussion_msg_id."""
-        with self._get_connection() as conn:
-            cur = conn.execute(
-                "SELECT * FROM posts WHERE tg_discussion_msg_id IS NULL ORDER BY vk_post_id DESC;"
-            )
-            return [dict(row) for row in cur.fetchall()]
+            if not row:
+                return None
+            data = dict(row)
+            if not data.get("tg_post_msg_id"):
+                data["tg_post_msg_id"] = data.get("tg_channel_msg_id") or data.get("tg_discussion_msg_id")
+            return data
 
     def get_recent_posts(self, limit: int = 20) -> List[dict]:
         """Возвращает недавние посты для проверки комментариев."""
@@ -142,7 +146,13 @@ class Database:
                 """,
                 (limit,)
             )
-            return [dict(row) for row in cur.fetchall()]
+            posts = []
+            for row in cur.fetchall():
+                data = dict(row)
+                if not data.get("tg_post_msg_id"):
+                    data["tg_post_msg_id"] = data.get("tg_channel_msg_id") or data.get("tg_discussion_msg_id")
+                posts.append(data)
+            return posts
 
     def comment_exists(self, vk_comment_id: int) -> bool:
         with self._get_connection() as conn:

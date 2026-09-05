@@ -42,8 +42,7 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          TELEGRAM_DISCUSSION_ID: ${{ secrets.TELEGRAM_DISCUSSION_ID }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || secrets.TELEGRAM_CHANNEL_ID }}
           TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
           ADMIN_TG_ID: ${{ secrets.ADMIN_TG_ID }}
           VK_ACCESS_TOKEN: ${{ secrets.VK_ACCESS_TOKEN }}
@@ -56,7 +55,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           passphrase: ${{ secrets.SSH_PASSPHRASE || '' }}
-          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHANNEL_ID,TELEGRAM_DISCUSSION_ID,TELEGRAM_TOPIC_ID,ADMIN_TG_ID,VK_ACCESS_TOKEN,VK_GROUP_DOMAIN,POLL_INTERVAL,INITIAL_POSTS_COUNT
+          envs: TELEGRAM_BOT_TOKEN,TELEGRAM_CHAT_ID,TELEGRAM_TOPIC_ID,ADMIN_TG_ID,VK_ACCESS_TOKEN,VK_GROUP_DOMAIN,POLL_INTERVAL,INITIAL_POSTS_COUNT
           script_stop: false
           script: |
             set -e
@@ -81,8 +80,7 @@ jobs:
             # 2. Инъекция переменных окружения в .env
             echo "🔐 Запись конфигурации .env из GitHub Actions Secrets..."
             echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN" > .env
-            echo "TELEGRAM_CHANNEL_ID=$TELEGRAM_CHANNEL_ID" >> .env
-            echo "TELEGRAM_DISCUSSION_ID=$TELEGRAM_DISCUSSION_ID" >> .env
+            echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID" >> .env
             echo "TELEGRAM_TOPIC_ID=$TELEGRAM_TOPIC_ID" >> .env
             echo "ADMIN_TG_ID=$ADMIN_TG_ID" >> .env
             echo "VK_ACCESS_TOKEN=$VK_ACCESS_TOKEN" >> .env

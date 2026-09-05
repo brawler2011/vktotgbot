@@ -10,8 +10,9 @@ load_dotenv()
 
 class Config:
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    TELEGRAM_CHANNEL_ID: str = os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
-    TELEGRAM_DISCUSSION_ID: str = os.getenv("TELEGRAM_DISCUSSION_ID", "").strip()
+    TELEGRAM_CHAT_ID: str = (os.getenv("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHANNEL_ID", "")).strip()
+    # Alias for backward compatibility
+    TELEGRAM_CHANNEL_ID: str = TELEGRAM_CHAT_ID
     TELEGRAM_TOPIC_ID: Optional[int] = (
         int(os.getenv("TELEGRAM_TOPIC_ID").strip())
         if os.getenv("TELEGRAM_TOPIC_ID") and os.getenv("TELEGRAM_TOPIC_ID").strip().isdigit()
@@ -35,8 +36,8 @@ class Config:
         errors = []
         if not cls.TELEGRAM_BOT_TOKEN:
             errors.append("TELEGRAM_BOT_TOKEN не указан в .env")
-        if not cls.TELEGRAM_CHANNEL_ID:
-            errors.append("TELEGRAM_CHANNEL_ID не указан в .env")
+        if not cls.TELEGRAM_CHAT_ID:
+            errors.append("TELEGRAM_CHAT_ID (или TELEGRAM_CHANNEL_ID) не указан в .env")
         if not cls.VK_ACCESS_TOKEN:
             errors.append("VK_ACCESS_TOKEN не указан в .env")
         if not cls.VK_GROUP_DOMAIN:

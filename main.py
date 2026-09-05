@@ -12,8 +12,6 @@ from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     CommandHandler,
-    MessageHandler,
-    filters,
 )
 
 from config import config
@@ -67,73 +65,12 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 <b>Статус VK to TG бота</b>\n\n"
         f"🟢 <b>Состояние:</b> {'Работает штатно' if not error_active else '⚠️ Были ошибки'}\n"
         f"⏱ <b>Аптайм:</b> <code>{uptime}</code>\n"
-        f"🎯 <b>Цель:</b> <code>{config.TELEGRAM_CHANNEL_ID}</code> (топик: {config.TELEGRAM_TOPIC_ID or 'нет'})\n"
+        f"🎯 <b>Цель:</b> <code>{config.TELEGRAM_CHAT_ID}</code> (топик: {config.TELEGRAM_TOPIC_ID or 'нет'})\n"
         f"👥 <b>VK сообщество:</b> <code>{config.VK_GROUP_DOMAIN}</code>\n"
         f"🔄 <b>Последний опрос VK:</b> {last_poll_str}\n"
         f"📝 <b>Постов в базе:</b> {posts_count}\n"
     )
     await msg.reply_text(status_text, parse_mode=ParseMode.HTML)
-
-
-async def handle_discussion_forward(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Перехватывает автофорвард сообщения из канала в группу обсуждений.
-    Запоминает ID сообщения в группе, чтобы слать комментарии именно в его ветку.
-    """
-    msg = update.effective_message
-    if not msg:
-        return
-
-    # Проверяем, является ли сообщение автоматическим форвардом из канала
-    is_auto = getattr(msg, "is_automatic_forward", False)
-    if is_auto:
-        # Извлекаем message_id поста в самом канале
-        channel_msg_id = getattr(msg, "forward_from_message_id", None)
-        
-        # Поддержка Telegram Bot API 7.0+ forward_origin
-        if not channel_msg_id and hasattr(msg, "forward_origin"):
-            origin = getattr(msg, "forward_origin", None)
-            origin_type = getattr(origin, "type", "")
-            if origin and (origin_type == "channel" or str(origin_type).lower().endswith("channel")):
-                channel_msg_id = getattr(origin, "message_id", None)
-
-        if channel_msg_id:
-            discussion_msg_id = msg.message_id
-            db.update_discussion_msg_id(channel_msg_id, discussion_msg_id)
-            logger.info(
-                f"🔗 Связано обсуждение поста: channel_msg_id={channel_msg_id} "
-                f"-> discussion_msg_id={discussion_msg_id}"
-            )
-            # Если discussion_id еще не был определен, запоминаем его
-            if not tg_bridge.discussion_id:
-                tg_bridge.discussion_id = str(msg.chat_id)
-
-            # Сразу же синхронизируем комментарии для этого поста без ожидания следующего цикла
-            post = db.get_post_by_channel_msg_id(channel_msg_id)
-            if post:
-                post["tg_discussion_msg_id"] = discussion_msg_id
-                await sync_post_comments(post)
-                # Обновляем сохраненное количество комментариев
-                vk_comments = await vk_client.get_comments(post["vk_post_id"])
-                db.update_comments_count(post["vk_post_id"], len(vk_comments))
-
-
-async def resolve_missing_discussions_if_needed():
-    """Проверяет посты без tg_discussion_msg_id и пытается найти их в группе обсуждений."""
-    posts_missing = db.get_posts_without_discussion_id()
-    if not posts_missing:
-        return
-
-    logger.info(f"🔍 Найдено {len(posts_missing)} постов без tg_discussion_msg_id. Автопоиск в группе...")
-    resolved = await tg_bridge.resolve_missing_discussions(posts_missing)
-    for channel_msg_id, disc_id in resolved.items():
-        db.update_discussion_msg_id(channel_msg_id, disc_id)
-        post = db.get_post_by_channel_msg_id(channel_msg_id)
-        if post:
-            post["tg_discussion_msg_id"] = disc_id
-            await sync_post_comments(post)
-            vk_comments = await vk_client.get_comments(post["vk_post_id"])
-            db.update_comments_count(post["vk_post_id"], len(vk_comments))
 
 
 post_locks: collections.defaultdict[int, asyncio.Lock] = collections.defaultdict(asyncio.Lock)
@@ -142,10 +79,10 @@ post_locks: collections.defaultdict[int, asyncio.Lock] = collections.defaultdict
 async def sync_post_comments(post_data: dict):
     """Синхронизирует новые комментарии для конкретного поста."""
     vk_post_id = post_data["vk_post_id"]
-    discussion_msg_id = post_data.get("tg_discussion_msg_id")
+    post_msg_id = post_data.get("tg_post_msg_id")
 
-    if not discussion_msg_id:
-        logger.debug(f"У поста VK {vk_post_id} еще не определен discussion_msg_id")
+    if not post_msg_id:
+        logger.warning(f"У поста VK {vk_post_id} нет сохраненного tg_post_msg_id для ответов")
         return
 
     async with post_locks[vk_post_id]:
@@ -154,7 +91,7 @@ async def sync_post_comments(post_data: dict):
             if db.comment_exists(comment.id):
                 continue
 
-            sent_id = await tg_bridge.send_comment(comment, discussion_msg_id, vk_client)
+            sent_id = await tg_bridge.send_comment(comment, post_msg_id, vk_client)
             if sent_id:
                 db.save_comment(comment.id, vk_post_id, sent_id)
                 await asyncio.sleep(0.5)
@@ -175,17 +112,14 @@ async def poll_vk_cycle():
 
         for post in new_posts:
             logger.info(f"🆕 Обнаружен новый пост VK {post.id}")
-            channel_msg_id = await tg_bridge.send_post(post, vk_client)
-            if channel_msg_id:
-                # В топике супергруппы ID поста сразу является целевым ID для комментариев
-                db.save_post(post.id, channel_msg_id, post.date, comments_count=0)
-                if tg_bridge.topic_id:
-                    db.update_discussion_msg_id(channel_msg_id, channel_msg_id)
+            tg_post_msg_id = await tg_bridge.send_post(post, vk_client)
+            if tg_post_msg_id:
+                db.save_post(post.id, tg_post_msg_id, post.date, comments_count=0)
 
                 if tg_bridge.admin_id:
                     await tg_bridge.send_admin(
                         f"📢 <b>Опубликован новый пост из VK:</b>\n"
-                        f"ID: <code>{post.id}</code> (msg_id: {channel_msg_id})\n"
+                        f"ID: <code>{post.id}</code> (msg_id: {tg_post_msg_id})\n"
                         f"🔗 <a href='{post.vk_url}'>Оригинал ВКонтакте</a>"
                     )
 
@@ -193,29 +127,27 @@ async def poll_vk_cycle():
                 
                 if post.comments_count > 0:
                     stored_post = db.get_post(post.id)
-                    if stored_post and stored_post.get("tg_discussion_msg_id"):
+                    if stored_post:
                         await sync_post_comments(stored_post)
                         db.update_comments_count(post.id, post.comments_count)
 
             await asyncio.sleep(1.5)
 
         # 3. Проверка комментариев к существующим постам
-        # В режиме канала пытаемся привязать пропущенные обсуждения
-        if not tg_bridge.topic_id:
-            await resolve_missing_discussions_if_needed()
-
-        # Проверяем посты, где есть новые неотправленные комментарии
         for post in posts:
             if not db.post_exists(post.id):
                 continue
 
             stored_count = db.get_stored_comments_count(post.id)
-            if post.comments_count > stored_count:
+            synced_count = db.get_synced_comments_count(post.id)
+
+            # Проверяем, если в ВК появились новые комментарии, которых еще нет в Telegram
+            if post.comments_count > stored_count or post.comments_count > synced_count:
                 stored_post = db.get_post(post.id)
-                if stored_post and stored_post.get("tg_discussion_msg_id"):
+                if stored_post:
                     logger.info(
                         f"💬 Обнаружены новые комментарии к посту {post.id}: "
-                        f"было {stored_count}, стало {post.comments_count}"
+                        f"в ВК {post.comments_count}, в БД {synced_count} (счетчик: {stored_count})"
                     )
                     await sync_post_comments(stored_post)
                     db.update_comments_count(post.id, post.comments_count)
@@ -258,24 +190,17 @@ async def initial_sync():
 
         for post in posts:
             logger.info(f"Публикация начального поста VK {post.id}...")
-            channel_msg_id = await tg_bridge.send_post(post, vk_client)
-            if channel_msg_id:
-                db.save_post(post.id, channel_msg_id, post.date, comments_count=0)
-                if tg_bridge.topic_id:
-                    db.update_discussion_msg_id(channel_msg_id, channel_msg_id)
-
+            tg_post_msg_id = await tg_bridge.send_post(post, vk_client)
+            if tg_post_msg_id:
+                db.save_post(post.id, tg_post_msg_id, post.date, comments_count=0)
                 await asyncio.sleep(2)
                 if post.comments_count > 0:
                     stored_post = db.get_post(post.id)
-                    if stored_post and stored_post.get("tg_discussion_msg_id"):
+                    if stored_post:
                         await sync_post_comments(stored_post)
                         db.update_comments_count(post.id, post.comments_count)
 
             await asyncio.sleep(2)
-
-        # Пытаемся привязать обсуждения, если работаем в режиме канала
-        if not tg_bridge.topic_id:
-            await resolve_missing_discussions_if_needed()
 
         logger.info("✅ Первоначальная синхронизация успешно завершена!")
     except Exception as e:
@@ -284,15 +209,10 @@ async def initial_sync():
 
 async def vk_poller_task():
     """Фоновая корутина периодического опроса ВК."""
-    # Ждём инициализации бота
     await asyncio.sleep(2)
 
     if db.is_empty():
         await initial_sync()
-    else:
-        # При перезапуске проверяем, нет ли постов с непривязанным обсуждением
-        if not tg_bridge.topic_id:
-            await resolve_missing_discussions_if_needed()
 
     logger.info(f"🚀 Запущен регулярный опрос VK (интервал: {config.POLL_INTERVAL} сек)")
     while True:
@@ -307,10 +227,10 @@ async def post_init(app: Application):
     """Хук старта приложения: инициализирует Telegram Bridge и запускает поллер."""
     await tg_bridge.init()
     if tg_bridge.admin_id:
-        target_info = f"топик {tg_bridge.topic_id}" if tg_bridge.topic_id else "канал"
+        target_info = f"топик {tg_bridge.topic_id}" if tg_bridge.topic_id else "основной чат"
         await tg_bridge.send_admin(
             f"🟢 <b>VK to TG бот запущен!</b>\n\n"
-            f"🎯 <b>Цель:</b> <code>{tg_bridge.channel_id}</code> ({target_info})\n"
+            f"🎯 <b>Цель:</b> <code>{tg_bridge.chat_id}</code> ({target_info})\n"
             f"👥 <b>VK сообщество:</b> <code>{config.VK_GROUP_DOMAIN}</code>\n"
             f"⏱ <b>Интервал опроса:</b> {config.POLL_INTERVAL} сек\n\n"
             f"<i>Для проверки состояния отправьте /status</i>"
@@ -341,8 +261,7 @@ def main():
     vk_client = VKClient(config.VK_ACCESS_TOKEN, config.VK_GROUP_DOMAIN)
     tg_bridge = TelegramBridge(
         bot_token=config.TELEGRAM_BOT_TOKEN,
-        channel_id=config.TELEGRAM_CHANNEL_ID,
-        discussion_id=config.TELEGRAM_DISCUSSION_ID or None,
+        chat_id=config.TELEGRAM_CHAT_ID,
         topic_id=config.TELEGRAM_TOPIC_ID,
         admin_id=config.ADMIN_TG_ID
     )
@@ -357,14 +276,6 @@ def main():
 
     # Команды администратора для мониторинга
     app.add_handler(CommandHandler(["status", "ping"], handle_status))
-
-    # Слушаем все входящие служебные сообщения и форварды
-    app.add_handler(
-        MessageHandler(
-            filters.ALL,
-            handle_discussion_forward
-        )
-    )
 
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
